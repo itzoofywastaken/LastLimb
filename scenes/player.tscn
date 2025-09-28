@@ -6,124 +6,137 @@
 script/source = "extends CharacterBody2D
 
 # --- Constants ---
-const BASE_SPEED: float = 100.0
-const BASE_JUMP: float = -600.0
-const GRAVITY: float = 1400.0
-const MAX_HOLD: float = 1.0
+const GRAVITY: float = 800.0
+const MAX_HOLD_TIME: float = 1.0
 const MIN_SLIME: float = 0.05
-const MAX_SLIME: float = 0.20
-const MAX_SPEED_CAP: float = 600.0  # Absolute cap when small
+const MAX_SLIME: float = 0.25
+const BASE_SPEED: float = 750.0
+const MIN_JUMP_HEIGHT: float = -175.0
+const MAX_JUMP_HEIGHT: float = -525.0
+const MASS_LOSS_RATE: float = 0.1
+const WALL_SLIDE_SPEED: float = 50.0
+const WALL_JUMP_HORIZONTAL_MULT: float = 5.0
+const WALL_JUMP_GRACE: float = 0.1
 
-# --- Exported Variables ---
-@export var slime_size: float = 0.20
-@export var chunk_scene: PackedScene
+\\
+# --- Exported ---
+@export var slime_size: float = 0.25
+@export var purple_scene: PackedScene
 
-# --- Member Variables ---
-var space_held_time: float = 0.0
-var is_holding: bool = false
-var current_visual_size: float = slime_size
-var _player_orig_extents: Vector2 = Vector2.ZERO
+# --- Variables ---
+var current_size: float = slime_size
+var is_charging: bool = false
+var hold_time: float = 0.0
+var jump_velocity: float = 0.0
+var _orig_extents: Vector2 = Vector2.ZERO
+var is_sticking: bool = false
+var last_wall_normal: Vector2 = Vector2.ZERO
+var wall_jump_timer: float = 0.0
 
 # --- Node References ---
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
-@onready var player_collision: CollisionShape2D = $CollisionShape2D
+@onready var collision: CollisionShape2D = $CollisionShape2D
 
-# --- Initialization ---
+# --- Functions ---
+func _update_collision() -> void:
+	if collision.shape is RectangleShape2D:
+		collision.shape.extents = _orig_extents * current_size
+
 func _ready() -> void:
-	current_visual_size = slime_size
-	sprite.scale = Vector2.ONE * current_visual_size
+	current_size = slime_size
+	sprite.scale = Vector2.ONE * current_size
+	if collision.shape is RectangleShape2D:
+		_orig_extents = collision.shape.extents
+	_update_collision()
 
-	if player_collision.shape is RectangleShape2D:
-		_player_orig_extents = player_collision.shape.extents
-
-	var root: Node = get_tree().current_scene
-	for child in root.get_children():
-		if child.has_method(\"spawn_at\"):
-			child.queue_free()
-
-# --- Physics Update ---
 func _physics_process(delta: float) -> void:
-	# Apply gravity
-	if not is_on_floor():
-		velocity.y += GRAVITY * delta
-	else:
-		velocity.y = 0.0
-
-	# Dynamic speed: smaller = faster
-	var min_speed: float = 160.0
-	var max_speed: float = 800.0
-	var speed: float = remap(current_visual_size, MIN_SLIME, MAX_SLIME, max_speed, min_speed)
-	speed = min(speed, MAX_SPEED_CAP)
-
-	var input_dir: float = Input.get_axis(\"ui_left\", \"ui_right\")
-	velocity.x = input_dir * speed
-
-	# Flip sprite based on direction
+	var dir = Input.get_axis(\"ui_left\", \"ui_right\")
+	velocity.x = dir * BASE_SPEED * current_size
 	if velocity.x != 0:
 		sprite.flip_h = velocity.x < 0
 
-	# Adjusted jump scaling: smaller slime jumps less high
-	var min_jump: float = -200.0  # Previously -300.0
-	var max_jump: float = -650.0  # Previously -800.0
-	var jump_velocity: float = remap(current_visual_size, MIN_SLIME, MAX_SLIME, min_jump, max_jump)
+	# Reduce wall jump grace timer
+	if wall_jump_timer > 0.0:
+		wall_jump_timer -= delta
 
-	if Input.is_action_just_pressed(\"ui_up\") and is_on_floor():
+	# Gravity
+	if not is_on_floor() and wall_jump_timer <= 0:
+		if is_sticking:
+			velocity.y = WALL_SLIDE_SPEED
+		else:
+			velocity.y += GRAVITY * delta
+	elif is_on_floor():
+		velocity.y = 0
+
+	var wall_normal = get_wall_normal()
+	# Only stick for sliding if on wall and not recently jumped
+	if is_on_wall() and not is_on_floor() and wall_normal != last_wall_normal and wall_jump_timer <= 0:
+		is_sticking = true
+	else:
+		is_sticking = false
+
+	# Reset last wall when touching floor
+	if is_on_floor():
+		last_wall_normal = Vector2.ZERO
+
+	# Apply queued jump
+	if jump_velocity != 0:
 		velocity.y = jump_velocity
+		jump_velocity = 0
 
 	move_and_slide()
-	_update_player_collision()
 
-# --- Non-physics Update ---
 func _process(delta: float) -> void:
-	if Input.is_action_just_pressed(\"split_slime\"):
-		is_holding = true
-		space_held_time = 0.0
+	# Start charging jump
+	if Input.is_action_just_pressed(\"ui_up\") and (is_on_floor() or is_sticking):
+		is_charging = true
+		hold_time = 0.0
 
-	if is_holding:
-		space_held_time += delta
-		var hold_frac: float = clamp(space_held_time / MAX_HOLD, 0.0, 1.0)
-		var shrink_scale: float = max(current_visual_size * (1.0 - 0.5 * hold_frac), MIN_SLIME)
-		sprite.scale = Vector2.ONE * shrink_scale
+	if is_charging:
+		hold_time += delta
+		var frac = clamp(hold_time / MAX_HOLD_TIME, 0.0, 1.0)
+		sprite.scale = Vector2(current_size * (1.0 - 0.1 * frac), current_size)
+		_update_collision()
 
-	if Input.is_action_just_released(\"split_slime\") and is_holding:
-		is_holding = false
-		var final_frac: float = clamp(space_held_time / MAX_HOLD, 0.0, 1.0)
-		var shrink_scale: float = max(current_visual_size * (1.0 - 0.5 * final_frac), MIN_SLIME)
+	# Release jump
+	if Input.is_action_just_released(\"ui_up\") and is_charging:
+		is_charging = false
+		var charge_frac = clamp(hold_time / MAX_HOLD_TIME, 0.0, 1.0)
 
-		# Update visual size BEFORE performing split
-		current_visual_size = shrink_scale
-		sprite.scale = Vector2.ONE * current_visual_size
+		# Shrink proportional to MASS_LOSS_RATE
+		var shrink_amount = current_size * MASS_LOSS_RATE * charge_frac
+		current_size = max(current_size - shrink_amount, MIN_SLIME)
+		slime_size = current_size
+		sprite.scale = Vector2.ONE * current_size
+		_update_collision()
 
-		_perform_split_and_spawn(final_frac)
-		space_held_time = 0.0
+		if purple_scene != null and shrink_amount > 0.01:
+			var purple = purple_scene.instantiate()
+			purple.name = \"PurpleSlime_%d\" % randi()
+			get_tree().current_scene.add_child(purple)
+			if purple.has_method(\"spawn_at\"):
+				purple.spawn_at(global_position + Vector2(32, 0), shrink_amount)
 
-# --- Perform Split ---
-func _perform_split_and_spawn(fraction: float) -> void:
-	if chunk_scene == null:
-		return
+		# Compute jump height based on charge
+		var jump_height = lerp(MIN_JUMP_HEIGHT, MAX_JUMP_HEIGHT, charge_frac)
 
-	if fraction <= 0.02:
-		return
+		# Floor jump
+		if is_on_floor():
+			jump_velocity = jump_height
 
-	var split_amount: float = slime_size * fraction
-	var remaining: float = slime_size - split_amount
-	if remaining < MIN_SLIME:
-		return
+		# Wall jump: vertical fixed by charge, horizontal away from current wall
+		elif is_sticking:
+			var wall_dir = -sign(get_wall_normal().x) if get_wall_normal().x != 0 else -1
+			var horizontal_speed = (BASE_SPEED * 0.5 + charge_frac * BASE_SPEED) * WALL_JUMP_HORIZONTAL_MULT
+			velocity.y = jump_height
+			velocity.x = wall_dir * horizontal_speed
 
-	var chunk: Node = chunk_scene.instantiate()
-	var root: Node = get_tree().current_scene
-	root.add_child(chunk)
+			# Prevent re-sticking to the same wall immediately
+			last_wall_normal = get_wall_normal()
+			is_sticking = false
+			wall_jump_timer = WALL_JUMP_GRACE
 
-	if chunk.has_method(\"spawn_at\"):
-		chunk.spawn_at(global_position, split_amount)
-
-	slime_size = remaining
-	_update_player_collision()
-
-# --- Collision Shape Resizer ---
-func _update_player_collision() -> void:
-	if player_collision.shape is RectangleShape2D:
-		player_collision.shape.extents = _player_orig_extents * current_visual_size
+		hold_time = 0.0
 "
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_g2els"]
@@ -156,15 +169,16 @@ animations = [{
 }]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_3vyb7"]
-size = Vector2(102, 75)
+size = Vector2(84, 56)
 
 [node name="Player" type="CharacterBody2D"]
 script = SubResource("GDScript_3vyb7")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+position = Vector2(1, 0)
 sprite_frames = SubResource("SpriteFrames_g2els")
 autoplay = "default"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(-6, -2.5)
+position = Vector2(1, 1)
 shape = SubResource("RectangleShape2D_3vyb7")
