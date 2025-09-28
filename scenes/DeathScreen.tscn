@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3 uid="uid://dnch5wy3b3c1x"]
+
+[ext_resource type="Texture2D" uid="uid://h6fyqykpnq01" path="res://assets/ChatGPT Image Sept 27 from Vikram (20).png" id="1_5034k"]
+[ext_resource type="Script" uid="uid://cru5ebxiw8o63" path="res://scenes/button.gd" id="2_0r1s6"]
+
+[node name="DeathScreen" type="Node2D"]
+
+[node name="TextureRect" type="TextureRect" parent="."]
+offset_right = 40.0
+offset_bottom = 40.0
+texture = ExtResource("1_5034k")
+
+[node name="RetryButton" type="Button" parent="."]
+offset_right = 8.0
+offset_bottom = 8.0
+script = ExtResource("2_0r1s6")
